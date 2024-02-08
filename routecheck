@@ -1,0 +1,150 @@
+#!/bin/bash
+
+# function to convert ip address to binary
+function ip_to_binary {
+    # $1 - IPv4 Address
+
+    # split ip addresses into octects
+    IFS=. read a b c d <<< "$1"
+    
+    # convert each octet into binary individually
+    local A=$(bc <<< "obase=2; $a" | awk '{printf "%08d\n", $1}')
+    local B=$(bc <<< "obase=2; $b" | awk '{printf "%08d\n", $1}')
+    local C=$(bc <<< "obase=2; $c" | awk '{printf "%08d\n", $1}')
+    local D=$(bc <<< "obase=2; $d" | awk '{printf "%08d\n", $1}')
+
+    # concatinate the binary octects into a string and return the value to stdout
+    echo "$A$B$C$D"
+
+}
+
+# function to check if subnets overlap
+function check_overlap { 
+    # $1 = dynamically read IP range
+    # $2 = dynamically read prefix length
+    # $3 = statically read IP range
+    # $4 = statically read prefix length
+
+    local ip1="$1"
+    local mask1="$2"
+    local ip2="$3"
+    local mask2="$4"
+
+    # check if new IP address has a longer prefix match than existing routes 
+    if (( $mask2 < $mask1 )); then
+        # convert ip address into unformatteed 32 digit binary
+        local binip1=$(ip_to_binary $ip1)
+        local binip2=$(ip_to_binary $ip2)
+
+        # check up to the prefix length
+        local prefix1="${binip1:0:$mask1}"
+        local prefix2="${binip2:0:$mask1}"
+
+        # check if prefixes are identical
+        if [[ $prefix1 == $prefix2 ]]; then
+
+            # return false if overlap is detected
+            return 1
+
+        else
+
+            # return true if there is no overlap
+            return 0
+
+        fi
+        
+    else
+
+        # return true if there is no overlap
+        return 0
+
+    fi
+
+}
+
+# check if file exists, if not create file
+ROUTE="./routes"
+#initilize log file if does not exist
+if [ ! -f "$ROUTE" ]; then
+    touch $ROUTE
+    chmod 664 $ROUTE
+    echo "routes file has been created"
+fi
+
+# main loop
+while true
+do
+
+    echo
+    echo "CHECK ROUTES"
+    echo "----------------------------------------------"
+    # get routes in the system route table
+    # awk prints line if formatted as IP address
+    ip_addresses=$(ip route | grep bird | awk '/^[0-9]/{print $1}')
+
+        # loop for each ip addresses in the routing table
+        for ip_address in $ip_addresses; do
+
+            # this is a parameter to determine if a route should be added to the routing table
+            add_table=0
+
+            # if there is a direct match (same route) in subnets skip the loop entirely
+            if $(grep -q $ip_address $ROUTE); then 
+
+                echo "Existing route $ip_address is already in the table"
+
+            # commence the check
+            else
+
+                # split prefix and prefix length into different vairables
+                incoming_ip=$(echo $ip_address | awk -F "/" '{print $1}')
+                incoming_prefix=$(echo $ip_address | awk -F "/" '{print $2}')
+
+                # read each route that is stored in "routes"
+                existing_routes=$(cat $ROUTE)
+                for routes in $existing_routes; do
+                
+                    #split lines into prefix and prefix length as different variables
+                    existing_ip=$(echo $routes | awk -F "/" '{print $1}')
+                    existing_prefix=$(echo $routes | awk -F "/" '{print $2}')
+
+                    # add parameter to check if route should be added to the 
+
+                    #check overlap. if return 1 (no overlap) detect hijack
+
+                    if ! check_overlap $incoming_ip $incoming_prefix $existing_ip $existing_prefix; then
+
+                        echo "Potential Hijack detected for route for route $ip_address"
+
+                        # change add_table = 1
+                        add_table=1
+
+                        # add firewall rule (ufw) to stop traffic going to desintaiton subnet
+                        if ! $(sudo grep -q $ip_address /etc/ufw/user.rules); then
+
+                            sudo ufw deny to $ip_address
+
+                        fi
+
+                        #exit loop immediately
+                        break
+                        
+                    fi
+
+                done
+                # if no hijack was detected (add_table = 0)
+                if (( $add_table == 0 )); then 
+                    
+                    #add route to routes file
+                    echo $ip_address >> $ROUTE
+                    echo "new route $ip_address added to table"
+
+                fi
+
+            fi
+
+        done
+
+    sleep 1
+
+done
