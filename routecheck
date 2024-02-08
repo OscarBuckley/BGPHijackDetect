@@ -108,10 +108,7 @@ do
                     existing_ip=$(echo $routes | awk -F "/" '{print $1}')
                     existing_prefix=$(echo $routes | awk -F "/" '{print $2}')
 
-                    # add parameter to check if route should be added to the 
-
-                    #check overlap. if return 1 (no overlap) detect hijack
-
+                    #check overlap. if return 1 (overlap) detect hijack
                     if ! check_overlap $incoming_ip $incoming_prefix $existing_ip $existing_prefix; then
 
                         echo "Potential Hijack detected for route for route $ip_address"
